@@ -1,6 +1,6 @@
 
-#ifndef AZEROTHCORE_REAGENTBANK_H
-#define AZEROTHCORE_REAGENTBANK_H
+#ifndef AZEROTHCORE_REAGENTBANKACCOUNT_H
+#define AZEROTHCORE_REAGENTBANKACCOUNT_H
 #include "ScriptMgr.h"
 #include "Player.h"
 #include "Config.h"
@@ -11,7 +11,7 @@
 #include "ItemTemplate.h"
 #include <map>
 
-#define MAX_OPTIONS 23
+#define MAX_OPTIONS 7
 #define MAX_PAGE_NUMBER 700 // Values higher than this are considered Item IDs
 #define NPC_TEXT_ID 4259 // Pre-existing NPC text
 
@@ -22,4 +22,4 @@ enum GossipItemType : uint8
 };
 
 
-#endif //AZEROTHCORE_REAGENTBANK_H
+#endif //AZEROTHCORE_REAGENTBANKACCOUNT_H

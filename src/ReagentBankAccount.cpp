@@ -1,11 +1,7 @@
-/*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license: https://github.com/azerothcore/azerothcore-wotlk/blob/master/LICENSE-AGPL3
- */
-
-#include "ReagentBank.h"
+#include "ReagentBankAccount.h"
 
 // Add player scripts
-class npc_reagent_banker : public CreatureScript
+class npc_reagent_banker_account : public CreatureScript
 {
 private:
     std::string GetItemLink(uint32 entry, WorldSession* session) const
@@ -45,8 +41,8 @@ private:
     void WithdrawItem(Player* player, uint32 entry)
     {
         // This query can be changed to async to improve performance, but there will be some visual bugs because the query will not be done executing when the menu refreshes
-        std::string query = "SELECT amount FROM custom_reagent_bank WHERE character_id = " + std::to_string(player->GetGUID().GetCounter()) + " AND item_entry = " + std::to_string(entry);
-        QueryResult result = CharacterDatabase.Query("SELECT amount FROM custom_reagent_bank WHERE character_id = " + std::to_string(player->GetGUID().GetCounter()) + " AND item_entry = " + std::to_string(entry));
+        std::string query = "SELECT amount FROM custom_reagent_bank_account WHERE account_id = " + std::to_string(player->GetSession()->GetAccountId()) + " AND item_entry = " + std::to_string(entry);
+        QueryResult result = CharacterDatabase.Query("SELECT amount FROM custom_reagent_bank_account WHERE account_id = " + std::to_string(player->GetSession()->GetAccountId()) + " AND item_entry = " + std::to_string(entry));
         if (result)
         {
             uint32 storedAmount = (*result)[0].Get<uint32>();
@@ -59,7 +55,7 @@ private:
                 InventoryResult msg = player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, entry, storedAmount);
                 if (msg == EQUIP_ERR_OK)
                 {
-                    CharacterDatabase.Execute("DELETE FROM custom_reagent_bank WHERE character_id = {} AND item_entry = {}", player->GetGUID().GetCounter(), entry);
+                    CharacterDatabase.Execute("DELETE FROM custom_reagent_bank_account WHERE account_id = {} AND item_entry = {}", player->GetSession()->GetAccountId(), entry);
                     Item* item = player->StoreNewItem(dest, entry, true);
                     player->SendNewItem(item, storedAmount, true, false);
                 }
@@ -76,7 +72,7 @@ private:
                 InventoryResult msg = player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, entry, stackSize);
                 if (msg == EQUIP_ERR_OK)
                 {
-                    CharacterDatabase.Execute("UPDATE custom_reagent_bank SET amount = {} WHERE character_id = {} AND item_entry = {}", storedAmount - stackSize, player->GetGUID().GetCounter(), entry);
+                    CharacterDatabase.Execute("UPDATE custom_reagent_bank_account SET amount = {} WHERE account_id = {} AND item_entry = {}", storedAmount - stackSize, player->GetSession()->GetAccountId(), entry);
                     Item* item = player->StoreNewItem(dest, entry, true);
                     player->SendNewItem(item, stackSize, true, false);
                 }
@@ -89,7 +85,7 @@ private:
         }
     }
 
-    void UpdateItemCount(std::map<uint32, uint32> &entryToAmountMap, std::map<uint32, uint32> &entryToSubclassMap, Item* pItem, Player* player, uint32 bagSlot, uint32 itemSlot)
+    void UpdateItemCount(std::map<uint32, uint32> &entryToAmountMap, std::map<uint32, uint32> &entryToSubclassMap, std::map<uint32, uint32> &itemsAddedMap, Item* pItem, Player* player, uint32 bagSlot, uint32 itemSlot)
     {
         uint32 count = pItem->GetCount();
         ItemTemplate const *itemTemplate = pItem->GetTemplate();
@@ -113,18 +109,32 @@ private:
         }
         else
         {
-            entryToAmountMap[itemEntry] = entryToAmountMap.find(itemEntry)->second + count;
+			uint32 existingCount = entryToAmountMap.find(itemEntry)->second;
+            entryToAmountMap[itemEntry] = existingCount + count;
         }
+
+        // Update our map that tracks what was deposited
+        if (!itemsAddedMap.count(itemEntry))
+        {
+            itemsAddedMap[itemEntry] = count;
+        }
+        else
+        {
+			uint32 existingCount = itemsAddedMap.find(itemEntry)->second;
+            itemsAddedMap[itemEntry] = existingCount + count;
+        }
+
         // The item counts have been updated, remove the original items from the player
         player->DestroyItem(bagSlot, itemSlot, true);
     }
 
     void DepositAllReagents(Player* player) {
         WorldSession *session = player->GetSession();
-        std::string query = "SELECT item_entry, item_subclass, amount FROM custom_reagent_bank WHERE character_id = " + std::to_string(player->GetGUID().GetCounter());
+        std::string query = "SELECT item_entry, item_subclass, amount FROM custom_reagent_bank_account WHERE account_id = " + std::to_string(player->GetSession()->GetAccountId());
         session->GetQueryProcessor().AddCallback( CharacterDatabase.AsyncQuery(query).WithCallback([=, this](QueryResult result) {
             std::map<uint32, uint32> entryToAmountMap;
             std::map<uint32, uint32> entryToSubclassMap;
+            std::map<uint32, uint32> itemsAddedMap;
             if (result)
             {
                 do {
@@ -140,7 +150,7 @@ private:
             {
                 if (Item* pItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i))
                 {
-                    UpdateItemCount(entryToAmountMap, entryToSubclassMap, pItem, player, INVENTORY_SLOT_BAG_0, i);
+                    UpdateItemCount(entryToAmountMap, entryToSubclassMap, itemsAddedMap, pItem, player, INVENTORY_SLOT_BAG_0, i);
                 }
 
             }
@@ -153,7 +163,7 @@ private:
                 for (uint32 j = 0; j < bag->GetBagSize(); j++) {
                     if (Item * pItem = player->GetItemByPos(i, j))
                     {
-                        UpdateItemCount(entryToAmountMap, entryToSubclassMap, pItem, player, i, j);
+                        UpdateItemCount(entryToAmountMap, entryToSubclassMap, itemsAddedMap, pItem, player, i, j);
                     }
                 }
             }
@@ -165,36 +175,54 @@ private:
                     uint32 itemEntry = mapEntry.first;
                     uint32 itemAmount = mapEntry.second;
                     uint32 itemSubclass = entryToSubclassMap.find(itemEntry)->second;
-                    trans->Append("REPLACE INTO custom_reagent_bank (character_id, item_entry, item_subclass, amount) VALUES ({}, {}, {}, {})", player->GetGUID().GetCounter(), itemEntry, itemSubclass, itemAmount);
+                    trans->Append("REPLACE INTO custom_reagent_bank_account (account_id, item_entry, item_subclass, amount) VALUES ({}, {}, {}, {})", player->GetSession()->GetAccountId(), itemEntry, itemSubclass, itemAmount);
                 }
                 CharacterDatabase.CommitTransaction(trans);
             }
+            if (itemsAddedMap.size() != 0)
+            {
+                ChatHandler(player->GetSession()).SendSysMessage("The following was deposited:");
+
+                for (std::pair<uint32, uint32> mapEntry : itemsAddedMap)
+                {
+                    uint32 itemEntry = mapEntry.first;
+                    uint32 itemAmount = mapEntry.second;
+                    
+                    ItemTemplate const *itemTemplate = sObjectMgr->GetItemTemplate(itemEntry);
+                    std::string itemName = itemTemplate->Name1;
+                    ChatHandler(player->GetSession()).SendSysMessage(std::to_string(itemAmount) + " " + itemName);
+                }
+            }
+            else
+            {
+                ChatHandler(player->GetSession()).PSendSysMessage("No reagents to deposit.");
+            }
         }));
-        ChatHandler(player->GetSession()).PSendSysMessage("All reagents deposited successfully.");
+
         CloseGossipMenuFor(player);
     }
 
 public:
-    npc_reagent_banker() : CreatureScript("npc_reagent_banker") { }
+    npc_reagent_banker_account() : CreatureScript("npc_reagent_banker_account") { }
 
     bool OnGossipHello(Player* player, Creature* creature) override
     {
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, "Deposit All Reagents", DEPOSIT_ALL_REAGENTS, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2589, 30, 30, -18, 0) + "Cloth", ITEM_SUBCLASS_CLOTH, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(12208, 30, 30, -18, 0) + "Meat", ITEM_SUBCLASS_MEAT, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2772, 30, 30, -18, 0) + "Metal & Stone", ITEM_SUBCLASS_METAL_STONE, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(10940, 30, 30, -18, 0) + "Enchanting", ITEM_SUBCLASS_ENCHANTING, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(7068, 30, 30, -18, 0) + "Elemental", ITEM_SUBCLASS_ELEMENTAL, 0);
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(4359, 30, 30, -18, 0) + "Parts", ITEM_SUBCLASS_PARTS, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2604, 30, 30, -18, 0) + "Other Trade Goods", ITEM_SUBCLASS_TRADE_GOODS_OTHER, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2453, 30, 30, -18, 0) + "Herb", ITEM_SUBCLASS_HERB, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2318, 30, 30, -18, 0) + "Leather", ITEM_SUBCLASS_LEATHER, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(1206, 30, 30, -18, 0) + "Jewelcrafting", ITEM_SUBCLASS_JEWELCRAFTING, 0);
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(4358, 30, 30, -18, 0) + "Explosives", ITEM_SUBCLASS_EXPLOSIVES, 0);
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(4388, 30, 30, -18, 0) + "Devices", ITEM_SUBCLASS_DEVICES, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(1206, 30, 30, -18, 0) + "Jewelcrafting", ITEM_SUBCLASS_JEWELCRAFTING, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2589, 30, 30, -18, 0) + "Cloth", ITEM_SUBCLASS_CLOTH, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2318, 30, 30, -18, 0) + "Leather", ITEM_SUBCLASS_LEATHER, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2772, 30, 30, -18, 0) + "Metal & Stone", ITEM_SUBCLASS_METAL_STONE, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(12208, 30, 30, -18, 0) + "Meat", ITEM_SUBCLASS_MEAT, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2453, 30, 30, -18, 0) + "Herb", ITEM_SUBCLASS_HERB, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(7068, 30, 30, -18, 0) + "Elemental", ITEM_SUBCLASS_ELEMENTAL, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(10940, 30, 30, -18, 0) + "Enchanting", ITEM_SUBCLASS_ENCHANTING, 0);
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(23572, 30, 30, -18, 0) + "Nether Material", ITEM_SUBCLASS_MATERIAL, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2604, 30, 30, -18, 0) + "Other Trade Goods", ITEM_SUBCLASS_TRADE_GOODS_OTHER, 0);
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(38682, 30, 30, -18, 0) + "Armor Vellum", ITEM_SUBCLASS_ARMOR_ENCHANTMENT, 0);
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(39349, 30, 30, -18, 0) + "Weapon Vellum", ITEM_SUBCLASS_WEAPON_ENCHANTMENT, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, "Deposit All Reagents", DEPOSIT_ALL_REAGENTS, 0);
         SendGossipMenuFor(player, NPC_TEXT_ID, creature->GetGUID());
         return true;
     }
@@ -239,8 +267,8 @@ public:
     void ShowReagentItems(Player* player, Creature* creature, uint32 item_subclass, uint16 gossipPageNumber)
     {
         WorldSession* session = player->GetSession();
-        std::string query = "SELECT item_entry, amount FROM custom_reagent_bank WHERE character_id = " + std::to_string(player->GetGUID().GetCounter()) + " AND item_subclass = " +
-                std::to_string(item_subclass) + " ORDER BY item_entry";
+        std::string query = "SELECT item_entry, amount FROM custom_reagent_bank_account WHERE account_id = " + std::to_string(player->GetSession()->GetAccountId()) + " AND item_subclass = " +
+                std::to_string(item_subclass) + " ORDER BY item_entry DESC";
         session->GetQueryProcessor().AddCallback(CharacterDatabase.AsyncQuery(query).WithCallback([=, this](QueryResult result)
         {
             uint32 startValue = (gossipPageNumber * (MAX_OPTIONS));
@@ -255,6 +283,14 @@ public:
                     itemEntries.push_back(itemEntry);
                 } while (result->NextRow());
             }
+            if (endValue < entryToAmountMap.size())
+            {
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Next Page", item_subclass, gossipPageNumber + 1);
+            }
+            if (gossipPageNumber > 0)
+            {
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Previous Page", item_subclass, gossipPageNumber - 1);
+            }
             for (uint32 i = startValue; i <= endValue; i++)
             {
                 if (itemEntries.empty() || i > itemEntries.size() - 1)
@@ -264,14 +300,6 @@ public:
                 uint32 itemEntry = itemEntries.at(i);
                 AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(itemEntry, 30, 30, -18, 0) + GetItemLink(itemEntry, session) + " (" + std::to_string(entryToAmountMap.find(itemEntry)->second) + ")", itemEntry, gossipPageNumber);
             }
-            if (gossipPageNumber > 0)
-            {
-                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Previous Page", item_subclass, gossipPageNumber - 1);
-            }
-            if (endValue < entryToAmountMap.size())
-            {
-                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Next Page", item_subclass, gossipPageNumber + 1);
-            }
             AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, "|TInterface/ICONS/Ability_Spy:30:30:-18:0|tBack...", MAIN_MENU, 0);
             SendGossipMenuFor(player, NPC_TEXT_ID, creature->GetGUID());
         }));
@@ -279,7 +307,7 @@ public:
 };
 
 // Add all scripts in one
-void AddSC_mod_reagent_bank()
+void AddSC_mod_reagent_bank_account()
 {
-    new npc_reagent_banker();
+    new npc_reagent_banker_account();
 }
