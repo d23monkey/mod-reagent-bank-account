@@ -188,9 +188,7 @@ private:
                     uint32 itemEntry = mapEntry.first;
                     uint32 itemAmount = mapEntry.second;
                     
-                    ItemTemplate const *itemTemplate = sObjectMgr->GetItemTemplate(itemEntry);
-                    std::string itemName = itemTemplate->Name1;
-                    ChatHandler(player->GetSession()).SendSysMessage(std::to_string(itemAmount) + " " + itemName);
+                    ChatHandler(player->GetSession()).SendSysMessage(GetItemLink(itemEntry, session) + " x" + std::to_string(itemAmount));
                 }
             }
             else
