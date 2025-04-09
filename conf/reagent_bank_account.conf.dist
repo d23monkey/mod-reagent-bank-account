@@ -11,3 +11,13 @@
 #
 
 ReagentBankAccount.Enable = 1
+
+########################################
+#
+#    ReagentBankAccount.Announce
+#        Description: Enable Announce a message on login for this module
+#        Default:     0 - Disabled
+#                     1 - Enabled
+#
+
+ReagentBankAccount.Announce = 1

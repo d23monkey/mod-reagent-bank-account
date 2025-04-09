@@ -1,6 +1,44 @@
 #include "ReagentBankAccount.h"
 
 // Add player scripts
+bool ReagentBankAccountEnableModule;
+bool ReagentBankAccountEnableModuleAnnounceModule;
+
+class ReagentBankAccountConfig : public WorldScript
+{
+public:
+    ReagentBankAccountConfig() : WorldScript("ReagentBankAccountConfig_conf", {
+        WORLDHOOK_ON_BEFORE_CONFIG_LOAD
+    }) { }
+
+    void OnBeforeConfigLoad(bool reload) override
+    {
+        if (!reload)
+        {
+            ReagentBankAccountEnableModule = sConfigMgr->GetOption<bool>("ReagentBankAccount.Enable", 1);
+            ReagentBankAccountEnableModuleAnnounceModule = sConfigMgr->GetOption<bool>("ReagentBankAccount.Announce", 1);
+        }
+    }
+};
+class npc_reagent_banker_account_Announce : public PlayerScript
+{
+
+public:
+
+    npc_reagent_banker_account_Announce() : PlayerScript("ReagentBankAccountAnnounce", {
+        PLAYERHOOK_ON_LOGIN
+    }) {}
+
+    void OnPlayerLogin(Player* player)
+    {
+        // Announce Module
+        if (ReagentBankAccountEnableModuleAnnounceModule)
+        {
+            ChatHandler(player->GetSession()).SendSysMessage("本服务器正在运行 |cff4CFF00共享材料银行 |r模块.");
+        }
+    }
+};
+
 class npc_reagent_banker_account : public CreatureScript
 {
 private:
@@ -145,7 +183,7 @@ private:
                     entryToSubclassMap[itemEntry] = itemSubclass;
                 } while (result->NextRow());
             }
-            // Inventory Items
+            // 处理背包物品
             for (uint8 i = INVENTORY_SLOT_ITEM_START; i < INVENTORY_SLOT_ITEM_END; ++i)
             {
                 if (Item* pItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i))
@@ -154,7 +192,7 @@ private:
                 }
 
             }
-            // Bag Items
+            // 处理背包内物品
             for (uint32 i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; i++)
             {
                 Bag* bag = player->GetBagByPos(i);
@@ -179,9 +217,11 @@ private:
                 }
                 CharacterDatabase.CommitTransaction(trans);
             }
+			// 向玩家发送有关存储物品的信息
             if (itemsAddedMap.size() != 0)
             {
-                ChatHandler(player->GetSession()).SendSysMessage("以下材料已被存放：");
+                //ChatHandler(player->GetSession()).SendSysMessage("以下材料已被存放：");
+				ChatHandler(player->GetSession()).SendSysMessage("======存放材料清单======\n");
 
                 for (std::pair<uint32, uint32> mapEntry : itemsAddedMap)
                 {
@@ -205,11 +245,16 @@ public:
 
     bool OnGossipHello(Player* player, Creature* creature) override
     {
+		if (!ReagentBankAccountEnableModule)
+        {
+            return false;
+        }
+
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, "存放所有材料", DEPOSIT_ALL_REAGENTS, 0);
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2589, 30, 30, -18, 0) + "布料", ITEM_SUBCLASS_CLOTH, 0);
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(12208, 30, 30, -18, 0) + "肉类", ITEM_SUBCLASS_MEAT, 0);
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2772, 30, 30, -18, 0) + "金属矿石", ITEM_SUBCLASS_METAL_STONE, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(10940, 30, 30, -18, 0) + "附魔", ITEM_SUBCLASS_ENCHANTING, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(10940, 30, 30, -18, 0) + "附魔材料", ITEM_SUBCLASS_ENCHANTING, 0);
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(7068, 30, 30, -18, 0) + "元素", ITEM_SUBCLASS_ELEMENTAL, 0);
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(4359, 30, 30, -18, 0) + "零件", ITEM_SUBCLASS_PARTS, 0);
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2604, 30, 30, -18, 0) + "其它商品", ITEM_SUBCLASS_TRADE_GOODS_OTHER, 0);
@@ -233,8 +278,11 @@ public:
             // item_subclass is actually an item ID to withdraw
             // Get the actual item subclass from the template
             const ItemTemplate *temp = sObjectMgr->GetItemTemplate(item_subclass);
+			if (!temp) return false;
             WithdrawItem(player, item_subclass);
-            if (temp->Class == ITEM_CLASS_GEM)
+			uint32 actualSubclass = (temp->Class == ITEM_CLASS_GEM) ? ITEM_SUBCLASS_JEWELCRAFTING : temp->SubClass;
+			ShowReagentItems(player, creature, actualSubclass, gossipPageNumber);
+            /*if (temp->Class == ITEM_CLASS_GEM)
             {
                 // Get back to ITEM_SUBCLASS_JEWELCRAFTING section when withdrawing gems
                 ShowReagentItems(player, creature, ITEM_SUBCLASS_JEWELCRAFTING, gossipPageNumber);
@@ -242,7 +290,7 @@ public:
             else
             {
                 ShowReagentItems(player, creature, temp->SubClass, gossipPageNumber);
-            }
+            }*/
             return true;
         }
         if (item_subclass == DEPOSIT_ALL_REAGENTS)
@@ -307,5 +355,7 @@ public:
 // Add all scripts in one
 void AddSC_mod_reagent_bank_account()
 {
-    new npc_reagent_banker_account();
+    new ReagentBankAccountConfig();
+	new npc_reagent_banker_account_Announce();
+	new npc_reagent_banker_account();
 }
