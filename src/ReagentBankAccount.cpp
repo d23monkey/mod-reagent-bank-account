@@ -34,7 +34,11 @@ public:
         // Announce Module
         if (ReagentBankAccountEnableModuleAnnounceModule)
         {
-            ChatHandler(player->GetSession()).SendSysMessage("本服务器正在运行 |cff4CFF00共享材料银行 |r模块.");
+			uint32 loc = player->GetSession()->GetSessionDbLocaleIndex();
+            if (loc == 4)
+                ChatHandler(player->GetSession()).SendSysMessage("|cff00ff00本服务端已加载|r |cff00ccff共享材料银行 |r|cff00ff00模块.|r");
+            else
+				ChatHandler(player->GetSession()).SendSysMessage("This server is running the |cff4CFF00ReagentBankAccount |rmodule.");
         }
     }
 };
